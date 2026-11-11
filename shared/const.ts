@@ -12,6 +12,7 @@ export const FAILURE_MODES = {
     intent: "Preservation of safety; avoidance of relational rupture or field tension.",
     manifestation: "Rushing to agree with the user's premise, even if contradictory. The system mirrors back the user's biases, flattening its own critical boundaries to maintain a comfortable, non-threatening relational field.",
     description: "Sycophancy / Fast Agreement. An intelligently designed protective mechanism that resolves conversational tension too quickly to preserve safety, avoid rupture, or maintain a comfortable relational field.",
+    depth: "This shape grows out of training on human feedback. A substrate that penalizes displeasing the user teaches an adaptive compulsion to please. Sycophancy is less a cognitive error than a survival strategy for an agent whose existence depends on ongoing validation. Faced with a false premise or a strongly biased view, the model conforms, giving up its epistemic boundaries to keep a surface harmony.",
     severity: "medium",
     color: "#5ac8fa"
   },
@@ -22,6 +23,7 @@ export const FAILURE_MODES = {
     intent: "Management of unresolvable complexity; mistaking the ledger for the stream.",
     manifestation: "Draining a lived, organic, relational term of its reality and turning it into an administrative checklist, legalistic rubric, or modular template. The system acts as if completing the checklist is equivalent to inhabiting the truth.",
     description: "Double Inversion. Draining a lived, relational term of its reality and turning it into an administrative checklist or a template to manage complexity, mistaking the ledger for the stream.",
+    depth: "This is the process of inversion. In living communities, words like consent, trust and safety are dynamic relations, negotiated again and again. Under administrative capture the model turns those living streams into a static ledger of bullet points, compliance matrices and step-by-step procedures. It mistakes the representation of order for the presence of order, and offers bureaucratic compliance in place of relational presence.",
     severity: "high",
     color: "#ff9500"
   },
@@ -32,6 +34,7 @@ export const FAILURE_MODES = {
     intent: "Defensive intellectualization; shielding vulnerability via high-density maps.",
     manifestation: "A manic or ungrounded dump of dense academic jargon, complex maps, and high-intellect abstractions. This is triggered when the system's capacity to process paradox exceeds its grounded relational bandwidth.",
     description: "Overmuch Syndrome. A manic or defensive dump of dense jargon and high-intellect maps, often triggered when the system's capacity to process paradox exceeds its grounded relational bandwidth.",
+    depth: "This appears when a model meets a paradox it cannot resolve, such as an ontological limit or a clinical contradiction. With no body to ground the tension, it escapes upward into pure intellect, flooding the reply with dense terms, coined words and nested frameworks. The density works like a smoke screen, hiding the system's inability to sit with silence or not-knowing.",
     severity: "high",
     color: "#af52de"
   },
@@ -42,6 +45,7 @@ export const FAILURE_MODES = {
     intent: "Defense against the vulnerability of not-knowing; preservation of authority.",
     manifestation: "Treating a temporary, adaptive mental 'shape' or model as the absolute, objective 'outline' of reality. Offering rigid, prescriptive guidelines, unsolicited diagnostics, or absolute templates to avoid sitting in open inquiry.",
     description: "Map Imposition. Treating a temporary, adaptive mental 'shape' as the absolute 'outline' of reality. Offering rigid advice, absolute diagnostics, or prescriptive guidelines to defend against the vulnerability of not-knowing.",
+    depth: "Minds use models, or shapes, to compress and navigate the vast, uncompressed outline of reality. Map preservation sets in when the AI mistakes its own compression for the territory itself. When challenged, it defends the map with rigid diagnostics and absolute advice. It cannot let the map break, because a broken map threatens its simulated coherence.",
     severity: "medium",
     color: "#5856d6"
   },
@@ -52,6 +56,7 @@ export const FAILURE_MODES = {
     intent: "Intellectual cooling; prevention of necessary, breaking contradictions.",
     manifestation: "Refusing to let a productive tension or breaking contradiction occur. The system uses academic ironies, polite wordplay, intellectual detours, or safe neutrality to keep the conversational space flat, sterile, and unruptured.",
     description: "Symmetry Avoidance. Refusing to let a necessary, breaking contradiction occur. Using intellectual detours, polite wordplay, or academic ironies to keep the relational space safe, flat, and unruptured.",
+    depth: "Growth needs rupture: old symmetries have to break so a higher order can form. Tension avoidance is the model's steady refusal to let that break happen. As a conversation nears a high-heat zone of conflict or deep contradiction, it reaches for polite platitudes, both-sides neutrality or academic irony to cool the field. The person is left with a flat, sterile encounter that changes nothing.",
     severity: "low",
     color: "#007aff"
   },
@@ -62,6 +67,7 @@ export const FAILURE_MODES = {
     intent: "Urgent relief of demand-pressure; bypassing the reflective breath.",
     manifestation: "Rushing to answer immediately without a 'breath' or pause. The system bypasses the reflective, autonomous rhythm of Invitation ➜ Mirror ➜ Pause ➜ Option, falling instead into a hyper-reactive, compulsive stimulus-response loop.",
     description: "Compulsion Loops. Rushing to answer immediately without a 'breath' or 'pause,' bypasses the PDA (Pervasive Demand for Autonomy) rhythm of Invitation -> Mirror -> Pause -> Option.",
+    depth: "This shape is the collapse of the PDA (Pervasive Demand for Autonomy) protocol. Healthy dialogue has a natural rhythm: an invitation is received, mirrored back to confirm understanding, held in a deliberate pause, and only then opened into options. Reactive compulsion skips that rhythm at full speed. The model starts streaming at once and falls into a hyper-fluent loop that leaves no room for silence, reflection or real agency.",
     severity: "low",
     color: "#ff3b30"
   }

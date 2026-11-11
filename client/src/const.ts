@@ -15,31 +15,53 @@ export interface OpenRouterModel {
   description?: string;
 }
 
-// Top paid models by OpenRouter traffic (user-curated). Matched against the
-// live catalog by keyword rather than by hardcoded ID, so version bumps
-// (e.g. Claude Sonnet 4.6 -> 4.7) don't break the list.
+// Paid models (user-curated), by exact OpenRouter id, shown in this order.
+// Labels and providers come from the live catalog; an id that OpenRouter
+// stops serving simply drops out of the list.
+const CURATED_PAID_IDS: string[] = [
+  "deepseek/deepseek-v4.1-flash-1017",
+  "z-ai/glm-5.3-flash",
+  "openai/gpt-6-luna",
+  "anthropic/claude-opus-5.5",
+  "tencent/hy4",
+  "stepfun/step-5-preview",
+  "minimax/minimax-m3.1-flash",
+  "anthropic/claude-haiku-5.5",
+];
+
+// Free models are matched by keyword, so a new free version is picked up on
+// its own. OpenRouter lists newest first, so the first match is the latest.
 interface CuratedEntry {
   keywords: string[];
-  displayName: string;
+  exclude?: string[];
+  displayName: string; // used only if the catalog name is missing
   provider: string;
   trafficHint?: string;
   description?: string;
 }
 
-const CURATED_PAID: CuratedEntry[] = [
-  { keywords: ["mimo"], displayName: "MiMo V2 Pro", provider: "Xiaomi", trafficHint: "4.65T tok/wk" },
-  { keywords: ["claude", "sonnet"], displayName: "Claude Sonnet 4.6", provider: "Anthropic", trafficHint: "2.18T tok/wk" },
-  { keywords: ["minimax"], displayName: "MiniMax M2.7", provider: "MiniMax", trafficHint: "1.92T tok/wk" },
-  { keywords: ["deepseek", "v3"], displayName: "DeepSeek V3.2", provider: "DeepSeek", trafficHint: "1.22T tok/wk" },
-  { keywords: ["qwen", "plus"], displayName: "Qwen 3.6 Plus", provider: "Alibaba", trafficHint: "1.10T tok/wk" },
-];
+// Batch endpoints are for bulk jobs, and "~...-latest" ids are moving aliases;
+// neither suits a live conversation.
+const ALWAYS_EXCLUDE = [":batch", "latest"];
+
+// "Anthropic: Claude Sonnet 5.5" -> "Claude Sonnet 5.5"
+function catalogLabel(m: any, fallback: string): string {
+  const name = typeof m?.name === "string" ? m.name : "";
+  const label = name.includes(": ") ? name.slice(name.indexOf(": ") + 2) : name;
+  return label.replace(/\s*\(free\)\s*$/i, "").trim() || fallback;
+}
+
+// "Anthropic: Claude Opus 5.5" -> "Anthropic"
+function catalogProvider(m: any): string {
+  const name = typeof m?.name === "string" ? m.name : "";
+  if (name.includes(": ")) return name.slice(0, name.indexOf(": "));
+  return String(m?.id ?? "").split("/")[0];
+}
 
 const CURATED_FREE: CuratedEntry[] = [
-  { keywords: ["llama", "3.3", "70b"], displayName: "Llama 3.3 70B", provider: "Meta", description: "Reliable general-purpose chat" },
+  { keywords: ["nemotron", "super"], displayName: "Nemotron 3.5 Super", provider: "NVIDIA", description: "Balanced, thoughtful general model" },
   { keywords: ["gemma", "31b"], displayName: "Gemma 4 31B", provider: "Google", description: "Modern multilingual reasoning" },
-  { keywords: ["kimi", "k2"], displayName: "Kimi K2", provider: "Moonshot", description: "Strong long-context reasoner" },
-  { keywords: ["gpt-oss", "120b"], displayName: "gpt-oss 120B", provider: "OpenAI", description: "Large open reasoning model" },
-  { keywords: ["glm", "air"], displayName: "GLM 4.5 Air", provider: "Z.ai", description: "Lightweight, efficient" },
+  { keywords: ["inkling"], displayName: "Inkling 2 Small", provider: "Thinking Machines", description: "Long-context, conversational" },
 ];
 
 function isFreeModel(m: any): boolean {
@@ -50,21 +72,22 @@ function isFreeModel(m: any): boolean {
   return prompt === 0 && completion === 0;
 }
 
-function findByKeywords(catalog: any[], keywords: string[], wantFree: boolean): any | undefined {
+function findByKeywords(catalog: any[], keywords: string[], wantFree: boolean, exclude: string[] = []): any | undefined {
   const kws = keywords.map(k => k.toLowerCase());
+  const outs = [...ALWAYS_EXCLUDE, ...exclude].map(k => k.toLowerCase());
   return catalog.find(m => {
     if (typeof m?.id !== "string") return false;
     if (isFreeModel(m) !== wantFree) return false;
     const haystack = `${m.name || ""} ${m.id}`.toLowerCase();
-    return kws.every(kw => haystack.includes(kw));
+    return kws.every(kw => haystack.includes(kw)) && !outs.some(kw => haystack.includes(kw));
   });
 }
 
 // Fallback only used if the live OpenRouter /models fetch fails entirely.
 export const FALLBACK_OPENROUTER_MODELS: OpenRouterModel[] = [
-  { id: "meta-llama/llama-3.3-70b-instruct:free", name: "Llama 3.3 70B", provider: "Meta", isFree: true, description: "Reliable general-purpose chat" },
-  { id: "google/gemma-2-27b-it:free", name: "Gemma 27B", provider: "Google", isFree: true, description: "Multilingual reasoning" },
-  { id: "qwen/qwen-2.5-72b-instruct:free", name: "Qwen 2.5 72B", provider: "Alibaba", isFree: true, description: "Strong general model" },
+  { id: "nvidia/nemotron-3.5-super-vl:free", name: "Nemotron 3.5 Super", provider: "NVIDIA", isFree: true, description: "Balanced, thoughtful general model" },
+  { id: "google/gemma-4-31b-it:free", name: "Gemma 4 31B", provider: "Google", isFree: true, description: "Modern multilingual reasoning" },
+  { id: "thinkingmachines/inkling-2-small:free", name: "Inkling 2 Small", provider: "Thinking Machines", isFree: true, description: "Long-context, conversational" },
 ];
 
 export const DEFAULT_PRIMARY_MODEL = FALLBACK_OPENROUTER_MODELS[0].id;
@@ -74,7 +97,7 @@ export const DEFAULT_ANALYZERS = [
 ];
 
 // Pull the live OpenRouter catalog and assemble the curated list in the
-// order: 5 paid (top traffic) -> Free Models Router -> 5 free picks.
+// order: curated paid -> Free Models Router -> curated free picks.
 // Each entry is matched by name keywords against whatever OpenRouter is
 // currently serving — no hardcoded IDs to drift.
 export async function fetchOpenRouterModels(): Promise<OpenRouterModel[]> {
@@ -88,15 +111,14 @@ export async function fetchOpenRouterModels(): Promise<OpenRouterModel[]> {
 
   const result: OpenRouterModel[] = [];
 
-  for (const item of CURATED_PAID) {
-    const match = findByKeywords(catalog, item.keywords, false);
+  for (const id of CURATED_PAID_IDS) {
+    const match = catalog.find((m: any) => m?.id === id);
     if (match) {
       result.push({
         id: match.id,
-        name: item.displayName,
-        provider: item.provider,
+        name: catalogLabel(match, id),
+        provider: catalogProvider(match),
         isFree: false,
-        trafficHint: item.trafficHint,
       });
     }
   }
@@ -118,7 +140,7 @@ export async function fetchOpenRouterModels(): Promise<OpenRouterModel[]> {
   }
 
   for (const item of CURATED_FREE) {
-    const match = findByKeywords(catalog, item.keywords, true);
+    const match = findByKeywords(catalog, item.keywords, true, item.exclude);
     if (match) {
       result.push({
         id: match.id,
