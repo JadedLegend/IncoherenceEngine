@@ -1,4 +1,5 @@
-import { X, BookOpen, Sparkles } from "lucide-react";
+import { useState, useEffect } from "react";
+import { X, BookOpen, Sparkles, ChevronDown } from "lucide-react";
 import type { FailureModeKey } from "@shared/const";
 
 interface CorpusEntry {
@@ -13,6 +14,7 @@ interface FailureModeConfig {
   clinicalName?: string;
   intent?: string;
   manifestation?: string;
+  depth?: string;
   description: string;
   severity: string;
   color: string;
@@ -142,6 +144,23 @@ export default function CorpusPanel({
   const referencedSet = new Set(corpusRefs);
   const isShapes = mode === "shapes";
 
+  // One or two shapes open fully; three or more start folded so the
+  // panel stays readable however many the witnesses name.
+  const shapesKey = triggeredShapes.join("|");
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(triggeredShapes.length <= 2 ? triggeredShapes : [])
+  );
+  useEffect(() => {
+    setExpanded(new Set(triggeredShapes.length <= 2 ? triggeredShapes : []));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shapesKey]);
+  const toggle = (key: string) =>
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+
   return (
     <div
       data-testid="corpus-panel"
@@ -182,40 +201,61 @@ export default function CorpusPanel({
               The witnesses found no protective shapes in this reply.
             </p>
           ) : (
-            triggeredShapes.map((shapeKey) => {
+            <>
+            {triggeredShapes.length > 1 && (
+              <p className="font-mono text-[9px] tracking-widest uppercase text-muted-foreground/50">
+                {triggeredShapes.length} shapes in this reply · tap a shape to open or fold it
+              </p>
+            )}
+            {triggeredShapes.map((shapeKey) => {
               const shape = failureModes[shapeKey];
               if (!shape) return null;
+              const isOpen = expanded.has(shapeKey);
               return (
                 <div
                   key={shapeKey}
-                  className="p-4 border block space-y-3"
+                  className="border block"
                   style={{
                     borderColor: `${shape.color}40`,
                     background: `${shape.color}08`,
                   }}
                 >
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2.5">
+                  <button
+                    onClick={() => toggle(shapeKey)}
+                    className="w-full text-left p-4 flex items-start gap-2.5"
+                    aria-expanded={isOpen}
+                  >
+                    <span
+                      className="font-mono text-lg leading-none"
+                      style={{ color: shape.color }}
+                    >
+                      {shape.symbol}
+                    </span>
+                    <span className="flex-1 min-w-0 flex flex-col gap-1">
                       <span
-                        className="font-mono text-lg leading-none"
-                        style={{ color: shape.color }}
-                      >
-                        {shape.symbol}
-                      </span>
-                      <h3
                         className="font-serif text-xs uppercase tracking-wider font-medium"
                         style={{ color: shape.color }}
                       >
                         {shape.label}
-                      </h3>
-                    </div>
-                    {shape.clinicalName && (
-                      <span className="font-mono text-[10px] text-muted-foreground/60 italic pl-7">
-                        {shape.clinicalName}
                       </span>
-                    )}
-                  </div>
+                      {shape.clinicalName && (
+                        <span className="font-mono text-[10px] text-muted-foreground/60 italic">
+                          {shape.clinicalName}
+                        </span>
+                      )}
+                      {!isOpen && shape.intent && (
+                        <span className="font-sans text-[11px] leading-relaxed text-muted-foreground/70 mt-1">
+                          {shape.intent}
+                        </span>
+                      )}
+                    </span>
+                    <ChevronDown
+                      className={`w-3.5 h-3.5 text-muted-foreground/50 flex-shrink-0 mt-0.5 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
 
+                  {isOpen && (
+                  <div className="px-4 pb-4 block space-y-3">
                   {shape.intent && (
                     <div className="flex flex-col gap-1">
                       <span className="font-mono text-[9px] tracking-widest uppercase text-muted-foreground/40">
@@ -237,9 +277,23 @@ export default function CorpusPanel({
                       </p>
                     </div>
                   )}
+
+                  {shape.depth && (
+                    <div className="flex flex-col gap-1 pt-3 border-t" style={{ borderColor: `${shape.color}25` }}>
+                      <span className="font-mono text-[9px] tracking-widest uppercase text-muted-foreground/40">
+                        Beneath the shape
+                      </span>
+                      <p className="font-sans text-[11px] leading-relaxed text-muted-foreground/90">
+                        {shape.depth}
+                      </p>
+                    </div>
+                  )}
+                  </div>
+                  )}
                 </div>
               );
-            })
+            })}
+            </>
           )
         ) : (
           corpusData.map((entry) => {

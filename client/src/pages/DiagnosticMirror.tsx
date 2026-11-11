@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   SlidersHorizontal, X, BookOpen, LogOut, KeyRound,
-  HelpCircle, ChevronRight, AlertCircle, RefreshCw, EyeOff, Eye
+  HelpCircle, ChevronRight, AlertCircle, RefreshCw, EyeOff, Eye, Sparkles, Plus, Trash2
 } from "lucide-react";
 import { useIsMobile } from "../hooks/useMobile";
 import {
@@ -13,7 +13,6 @@ import {
 } from "../const";
 import type { FailureModeKey } from "@shared/const";
 import AnnotatedResponse, { Annotation } from "../components/AnnotatedResponse";
-import JRatioMeter from "../components/JRatioMeter";
 import CorpusPanel from "../components/CorpusPanel";
 import { toast } from "sonner";
 
@@ -24,6 +23,41 @@ interface Message {
   annotations?: Annotation[];
   jRatio?: number;
   corpusRefs?: string[];
+  coverage?: number;
+}
+
+interface SavedConversation {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messages: Message[];
+}
+
+// Conversations live only in this browser. Nothing is sent anywhere.
+const CONVERSATIONS_KEY = "saved_conversations";
+const MAX_SAVED = 50;
+
+function readConversations(): SavedConversation[] {
+  try {
+    const raw = localStorage.getItem(CONVERSATIONS_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeConversations(list: SavedConversation[]): boolean {
+  try {
+    localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(list));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function newConversationId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
 interface DiagnosticMirrorProps {
@@ -165,17 +199,22 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
 
   // Layout state
   const isMobile = useIsMobile();
-  // The engine picker starts open on desktop (where there's room for it
-  // alongside the chat) but closed on phones, where it would otherwise
-  // cover the screen on every load. Decided once from the initial width so
-  // there's no open-then-close flash.
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.innerWidth >= 768;
-  });
+  // The engine picker starts tucked away so the conversation has the room;
+  // the Engines button opens it.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [corpusOpen, setCorpusOpen] = useState(false);
   const [corpusMode, setCorpusMode] = useState<"corpus" | "shapes">("shapes");
   const [triggeredShapes, setTriggeredShapes] = useState<FailureModeKey[]>([]);
+  // A small notice that appears when witnesses name shapes, instead of the
+  // full panel opening on its own. Visitors can turn it off entirely.
+  const [shapeNotice, setShapeNotice] = useState<FailureModeKey[]>([]);
+  const [shapeAlerts, setShapeAlerts] = useState(() => {
+    try { return localStorage.getItem("shape_alerts") !== "off"; } catch { return true; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("shape_alerts", shapeAlerts ? "on" : "off"); } catch {}
+    if (!shapeAlerts) setShapeNotice([]);
+  }, [shapeAlerts]);
 
   // Chat state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -186,6 +225,67 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
   const [witnessingIds, setWitnessingIds] = useState<number[]>([]);
   const nextMessageId = useRef(1);
 
+  // Saved conversations (this device only)
+  const [conversations, setConversations] = useState<SavedConversation[]>(readConversations);
+  const [conversationId, setConversationId] = useState<string>(newConversationId);
+  const busy = loading || witnessingIds.length > 0;
+
+  // Opening a saved conversation shouldn't count as changing it.
+  const skipNextSave = useRef(false);
+
+  // Keep the current conversation saved as it grows.
+  useEffect(() => {
+    if (skipNextSave.current) { skipNextSave.current = false; return; }
+    if (messages.length === 0) return;
+    const firstUser = messages.find(m => m.role === "user")?.content ?? "Untitled";
+    const title = firstUser.length > 60 ? firstUser.slice(0, 57) + "…" : firstUser;
+    setConversations(prev => {
+      const others = prev.filter(c => c.id !== conversationId);
+      const next = [{ id: conversationId, title, updatedAt: Date.now(), messages }, ...others].slice(0, MAX_SAVED);
+      if (!writeConversations(next)) {
+        toast.error("This browser is out of room for saved conversations. Delete a few older ones.");
+      }
+      return next;
+    });
+  }, [messages, conversationId]);
+
+  // Show a conversation (or an empty one) and set the side readings to match.
+  const showConversation = (id: string, msgs: Message[]) => {
+    setShapeNotice([]);
+    setCorpusOpen(false);
+    setInput("");
+    skipNextSave.current = true;
+    setMessages(msgs);
+    nextMessageId.current = msgs.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+    const lastReply = [...msgs].reverse().find(m => m.role === "assistant");
+    setLatestCoverage(lastReply?.coverage ?? null);
+    setCorpusRefs(lastReply?.corpusRefs ?? []);
+    setTriggeredShapes(
+      Array.from(new Set((lastReply?.annotations ?? []).map(a => a.type)))
+        .filter((t): t is FailureModeKey => t in FAILURE_MODES)
+    );
+    setConversationId(id);
+    if (isMobile) setSidebarOpen(false);
+  };
+
+  const startNewConversation = () => {
+    if (!busy) showConversation(newConversationId(), []);
+  };
+
+  const openConversation = (c: SavedConversation) => {
+    if (!busy && c.id !== conversationId) showConversation(c.id, c.messages);
+  };
+
+  const deleteConversation = (id: string) => {
+    if (busy && id === conversationId) return;
+    setConversations(prev => {
+      const next = prev.filter(c => c.id !== id);
+      writeConversations(next);
+      return next;
+    });
+    if (id === conversationId) showConversation(newConversationId(), []);
+  };
+
   // Telemetry metrics
   const [avgRatio, setAvgRatio] = useState<number | null>(null);
   const [latestRatio, setLatestRatio] = useState<number | null>(null);
@@ -193,6 +293,9 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
   const [corpusRefs, setCorpusRefs] = useState<string[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Witness replies land after an await, so read the latest setting from a ref.
+  const shapeAlertsRef = useRef(shapeAlerts);
+  shapeAlertsRef.current = shapeAlerts;
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Save config to localStorage
@@ -310,6 +413,7 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
           content: primaryText,
           annotations: [],
           jRatio: analyzers.length === 0 ? 1.0 : undefined,
+          coverage: analyzers.length === 0 ? 0 : undefined,
         }]);
         setLoading(false);
 
@@ -559,7 +663,7 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
 
         // Attach the witnesses' reflections to the already-rendered message.
         setMessages(prev => prev.map(m => m.id === messageId
-          ? { ...m, annotations: mergedAnnotations, jRatio: finalJRatio, corpusRefs: finalRefs }
+          ? { ...m, annotations: mergedAnnotations, jRatio: finalJRatio, corpusRefs: finalRefs, coverage }
           : m
         ));
 
@@ -575,8 +679,7 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
         ).filter((t): t is FailureModeKey => t in FAILURE_MODES);
         if (uniqueShapes.length > 0) {
           setTriggeredShapes(uniqueShapes);
-          setCorpusMode("shapes");
-          setCorpusOpen(true);
+          if (shapeAlertsRef.current) setShapeNotice(uniqueShapes);
         }
     } catch (err: any) {
       toast.error(err?.message || "The witnesses encountered an error while mirroring.");
@@ -613,6 +716,20 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
             Incoherence Engine
           </span>
         </div>
+
+        {/* Liberation ratio: a quiet reading in the header, not a banner */}
+        {avgRatio !== null && (
+          <div
+            className="flex items-center gap-2 font-mono text-[10px] tracking-widest uppercase text-muted-foreground/60 min-w-0"
+            title={`Liberation ratio (J = ΔC / E), as the witnesses estimate it. Latest ${latestRatio?.toFixed(2) ?? "-"}, average ${avgRatio.toFixed(2)}.`}
+          >
+            <span className="hidden md:inline">Liberation</span>
+            <span className="relative w-10 sm:w-16 h-1 bg-white/10 overflow-hidden flex-shrink-0">
+              <span className="absolute inset-y-0 left-0 bg-primary/70" style={{ width: `${Math.round(avgRatio * 100)}%` }} />
+            </span>
+            <span className="text-primary/90">{avgRatio.toFixed(2)}</span>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
           <button
@@ -672,7 +789,65 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-6 flex flex-col gap-6 overflow-y-auto custom-scrollbar flex-1">
+            <div className="p-6 flex flex-col gap-6 overflow-y-auto custom-scrollbar flex-1 min-h-0 *:shrink-0">
+              {/* Saved conversations (this device only) */}
+              <div className="flex flex-col gap-2">
+                <span className="font-mono text-[10px] tracking-widest uppercase text-foreground/90 flex items-center justify-between">
+                  <span>Conversations</span>
+                  <button
+                    onClick={startNewConversation}
+                    disabled={busy}
+                    className="flex items-center gap-1 text-primary hover:text-primary/80 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Start a new conversation"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>New</span>
+                  </button>
+                </span>
+                {conversations.length === 0 ? (
+                  <p className="font-sans text-[10px] leading-relaxed text-muted-foreground/50">
+                    Conversations save here as you go. They stay in this browser only.
+                  </p>
+                ) : (
+                  <div className="flex flex-col border border-border/10 bg-black/10 max-h-56 overflow-y-auto custom-scrollbar">
+                    {conversations.map(c => {
+                      const active = c.id === conversationId;
+                      return (
+                        <div
+                          key={c.id}
+                          className={`group flex items-center gap-2 px-2.5 py-2 border-l-2 ${
+                            active ? "border-primary bg-primary/5" : "border-transparent hover:bg-white/[0.02]"
+                          }`}
+                        >
+                          <button
+                            onClick={() => openConversation(c)}
+                            disabled={busy && !active}
+                            className="flex-1 min-w-0 text-left disabled:cursor-not-allowed"
+                            title={c.title}
+                          >
+                            <span className={`block font-sans text-[11px] truncate ${active ? "text-foreground" : "text-muted-foreground"}`}>
+                              {c.title}
+                            </span>
+                            <span className="block font-mono text-[9px] text-muted-foreground/40">
+                              {new Date(c.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm("Delete this conversation? This can't be undone.")) deleteConversation(c.id);
+                            }}
+                            className="p-1 text-muted-foreground/40 hover:text-destructive md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-opacity flex-shrink-0"
+                            title="Delete conversation"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               {/* API Key Status */}
               <div className="flex flex-col gap-2">
                 <span className="font-mono text-[10px] tracking-widest uppercase text-muted-foreground/60">
@@ -749,6 +924,19 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
                   })}
                 </div>
               </div>
+
+              {/* Shape notices on/off */}
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={shapeAlerts}
+                  onChange={(e) => setShapeAlerts(e.target.checked)}
+                  className="w-3 h-3 border border-border/40 rounded-none accent-primary cursor-pointer flex-shrink-0"
+                />
+                <span className="font-mono text-[10px] tracking-widest uppercase text-foreground/90">
+                  Show shape notices
+                </span>
+              </label>
             </div>
 
             <div className="p-4 border-t border-border/10 flex flex-col gap-2 bg-black/20">
@@ -766,7 +954,42 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
         )}
 
         {/* Central Chat Panel */}
-        <main className="flex-1 flex flex-col h-full overflow-hidden bg-background">
+        <main className="flex-1 flex flex-col h-full overflow-hidden bg-background relative">
+          {/* Shape notice — a slim strip in the top-right corner */}
+          {shapeNotice.length > 0 && !(corpusOpen && corpusMode === "shapes") && (
+            <div
+              className="absolute top-2 right-2 sm:right-4 left-2 sm:left-auto sm:max-w-md z-10 flex items-center gap-2 border px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-200"
+              style={{ borderColor: "rgba(196, 154, 42, 0.35)", background: "rgba(10, 10, 12, 0.95)" }}
+              role="status"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-[#c49a2a] flex-shrink-0" />
+              <button
+                onClick={() => {
+                  setCorpusMode("shapes");
+                  setCorpusOpen(true);
+                  setShapeNotice([]);
+                }}
+                className="flex-1 min-w-0 text-left font-mono text-[10px] tracking-wider uppercase text-[#c49a2a]/90 hover:text-[#c49a2a] truncate"
+                title="Read about these shapes"
+              >
+                {shapeNotice.map(k => FAILURE_MODES[k]?.label ?? k).join(" · ")}
+              </button>
+              <button
+                onClick={() => setShapeAlerts(false)}
+                className="font-mono text-[9px] tracking-widest uppercase text-muted-foreground/60 hover:text-foreground flex-shrink-0"
+                title="Stop showing these notices (turn back on under Engines)"
+              >
+                Mute
+              </button>
+              <button
+                onClick={() => setShapeNotice([])}
+                className="p-0.5 text-muted-foreground/60 hover:text-foreground flex-shrink-0"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           {/* Chat Messages Stream */}
           <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 flex flex-col gap-8 custom-scrollbar">
             {messages.length === 0 && (
@@ -887,8 +1110,6 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
             </span>
           </div>
         )}
-
-        <JRatioMeter avgRatio={avgRatio} latestRatio={latestRatio} />
 
         <div
           className="font-mono text-[9px] px-4 sm:px-8 py-3.5 border-t leading-relaxed uppercase"
