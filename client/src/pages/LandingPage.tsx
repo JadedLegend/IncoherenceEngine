@@ -133,7 +133,7 @@ export default function LandingPage({ onEnter }: LandingPageProps) {
           </h2>
           <div className="font-sans text-xs text-muted-foreground leading-relaxed flex flex-col gap-2">
             <p>
-              Welcome to the **Free Version**. To be absolutely clear: **there is nothing simulated about this version.**
+              Welcome to the <strong className="text-foreground font-semibold">Free Version</strong>. To be absolutely clear: <strong className="text-foreground font-semibold">there is nothing simulated about this version.</strong>
             </p>
             <p>
               You will be interacting with 100% real, active AI models (like Google's Gemini, Meta's Llama, and Qwen) performing genuine, high-level structural critiques of each other. 
@@ -164,13 +164,47 @@ export default function LandingPage({ onEnter }: LandingPageProps) {
               and sign up for a free account.
             </li>
             <li>
-              Navigate to your dashboard, create a new API key, and name it (e.g., "Incoherence Engine"). **No credit card is required.**
+              Open your{" "}
+              <a
+                href="https://openrouter.ai/settings/keys"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline font-bold inline-flex items-center gap-1"
+              >
+                API keys page
+                <ExternalLink className="w-3 h-3" />
+              </a>
+              , create a new key, and name it (e.g., "Incoherence Engine").{" "}
+              <strong className="text-foreground">No credit card is required.</strong>
             </li>
             <li>
-              Copy the key (it starts with <code className="text-foreground">sk-or-...</code>) and paste it on the welcome screen to begin.
+              Copy the key (it starts with <code className="text-foreground">sk-or-...</code>) and paste it below.
             </li>
           </ol>
         </div>
+
+        {/* Key entry right here, so nobody has to go back a screen */}
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <label className="font-mono text-[10px] tracking-widest uppercase text-[#00ff66] flex items-center gap-2">
+            <KeyRound className="w-3.5 h-3.5" />
+            Paste your key
+          </label>
+          <Input
+            type="password"
+            placeholder="PASTE OPENROUTER API KEY (sk-or-...)"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            autoComplete="off"
+            className="font-mono text-xs tracking-widest bg-background/50 border-border/40 focus:border-[#00ff66]/80 focus:ring-1 focus:ring-[#00ff66]/40 h-11 text-center"
+          />
+          <Button
+            type="submit"
+            className="w-full font-serif text-xs tracking-widest uppercase py-5 border border-[#c49a2a]/40 bg-[#c49a2a]/5 hover:bg-[#c49a2a]/15 text-[#c49a2a] hover:text-[#c49a2a] active:scale-[0.98] transition-all"
+          >
+            Enter In
+            <ArrowRight className="w-4 h-4 ml-2" />
+          </Button>
+        </form>
       </div>
     </div>
   );
