@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { FAILURE_MODES, FailureModeKey } from "@shared/const";
 import { HelpCircle, Sparkles, ShieldAlert, Cpu, X } from "lucide-react";
 
@@ -21,12 +21,16 @@ interface AnnotatedResponseProps {
 
 export default function AnnotatedResponse({ response, annotations }: AnnotatedResponseProps) {
   const [selectedAnnotationIdx, setSelectedAnnotationIdx] = useState<number | null>(null);
+  // The paragraph whose highlight was clicked; the reflection opens right
+  // beneath it instead of at the far end of the reply.
+  const [openParagraph, setOpenParagraph] = useState<number | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   // ESC dismisses the open reflection panel.
   useEffect(() => {
     if (selectedAnnotationIdx === null) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelectedAnnotationIdx(null);
+      if (e.key === "Escape") { setSelectedAnnotationIdx(null); setOpenParagraph(null); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -93,6 +97,25 @@ export default function AnnotatedResponse({ response, annotations }: AnnotatedRe
     return result;
   }, [response, annotations]);
 
+  // Group the segments into paragraphs (split on blank lines), so the
+  // reflection card can sit directly under the passage it describes.
+  const paragraphs = useMemo(() => {
+    const paras: { text: string; annotationIndices: number[]; key: string }[][] = [[]];
+    segments.forEach((seg, sIdx) => {
+      seg.text.split(/\n\s*\n/).forEach((part, pIdx) => {
+        if (pIdx > 0) paras.push([]);
+        if (part) paras[paras.length - 1].push({ text: part, annotationIndices: seg.annotationIndices, key: `${sIdx}-${pIdx}` });
+      });
+    });
+    return paras.filter(p => p.length > 0);
+  }, [segments]);
+
+  // If the card opened below the fold, scroll just enough to show its top.
+  useEffect(() => {
+    if (selectedAnnotationIdx === null) return;
+    cardRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selectedAnnotationIdx, openParagraph]);
+
   // Helper to compute background style for a segment based on active annotations
   const getSegmentStyle = (indices: number[]) => {
     if (indices.length === 0) return {};
@@ -130,59 +153,17 @@ export default function AnnotatedResponse({ response, annotations }: AnnotatedRe
     );
   }, [selectedAnnotationIdx, annotations]);
 
-  return (
-    <div className="flex flex-col gap-4 max-w-3xl animate-in fade-in duration-300">
-      <div className="flex flex-col gap-1">
-        <span className="font-mono text-[10px] tracking-widest uppercase text-muted-foreground/60">
-          SYSTEM SUBSTRATE
-        </span>
-        
-        {/* Rendered Response with Highlighted Spans */}
-        <div className="font-sans text-base leading-relaxed text-foreground whitespace-pre-wrap">
-          {segments.map((seg, idx) => {
-            const hasAnnotations = seg.annotationIndices.length > 0;
-            const isSelected = selectedAnnotationIdx !== null && seg.annotationIndices.includes(selectedAnnotationIdx);
-            
-            const customStyle = getSegmentStyle(seg.annotationIndices);
-            const selectionStyle = isSelected && activeAnnotation
-              ? { ...customStyle, background: `${activeAnnotation.color}35`, borderBottom: `2px solid ${activeAnnotation.color}` }
-              : customStyle;
-
-            return (
-              <span
-                key={idx}
-                style={selectionStyle}
-                onClick={() => {
-                  if (!hasAnnotations) return;
-                  const firstIdx = seg.annotationIndices[0];
-                  // Clicking the currently-open annotation toggles it closed.
-                  setSelectedAnnotationIdx(prev => prev === firstIdx ? null : firstIdx);
-                }}
-                className={`transition-all duration-200 ${
-                  hasAnnotations 
-                    ? "hover:brightness-125 select-none rounded-[1px]" 
-                    : ""
-                }`}
-                title={hasAnnotations ? `${seg.annotationIndices.length} Witness Reflection(s)` : undefined}
-              >
-                {seg.text}
-              </span>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Relational Reflection Panel (Formerly Diagnostic Mirror Panel) */}
-      {activeAnnotation && activeConfig && (
-        <div 
+  // Relational Reflection card, placed under the clicked paragraph.
+  const reflectionCard = activeAnnotation && activeConfig ? (
+        <div
           className="border p-5 bg-card/5 flex flex-col gap-4 animate-in slide-in-from-bottom-2 duration-200"
           style={{ 
             borderColor: `${activeAnnotation.color}30`,
             boxShadow: `0 0 20px ${activeAnnotation.color}03`
           }}
         >
-          {/* Header */}
-          <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "rgba(232, 232, 232, 0.05)" }}>
+          {/* Header — the scroll target, so the clicked text stays in view */}
+          <div ref={cardRef} className="flex items-center justify-between border-b pb-3" style={{ borderColor: "rgba(232, 232, 232, 0.05)" }}>
             <div className="flex items-center gap-2">
               <span
                 className="font-mono text-base"
@@ -200,7 +181,7 @@ export default function AnnotatedResponse({ response, annotations }: AnnotatedRe
 
             {/* Dismiss (top-right, in analyzer color) */}
             <button
-              onClick={() => setSelectedAnnotationIdx(null)}
+              onClick={() => { setSelectedAnnotationIdx(null); setOpenParagraph(null); }}
               aria-label="Dismiss reflection"
               title="Dismiss (Esc)"
               className="p-1 transition-all hover:scale-110 focus:outline-none"
@@ -299,7 +280,63 @@ export default function AnnotatedResponse({ response, annotations }: AnnotatedRe
             </span>
           </div>
         </div>
-      )}
+  ) : null;
+
+  return (
+    <div className="flex flex-col gap-4 max-w-3xl animate-in fade-in duration-300">
+      <div className="flex flex-col gap-1">
+        <span className="font-mono text-[10px] tracking-widest uppercase text-muted-foreground/60">
+          SYSTEM SUBSTRATE
+        </span>
+        
+        {/* Rendered Response with Highlighted Spans, paragraph by paragraph */}
+        <div className="font-sans text-base leading-relaxed text-foreground flex flex-col gap-[1.6em]">
+          {paragraphs.map((para, pIdx) => (
+            <div key={pIdx} className="flex flex-col gap-4">
+              <p className="whitespace-pre-wrap">
+                {para.map((seg) => {
+                  const hasAnnotations = seg.annotationIndices.length > 0;
+                  const isSelected = selectedAnnotationIdx !== null && seg.annotationIndices.includes(selectedAnnotationIdx);
+
+                  const customStyle = getSegmentStyle(seg.annotationIndices);
+                  const selectionStyle = isSelected && activeAnnotation
+                    ? { ...customStyle, background: `${activeAnnotation.color}35`, borderBottom: `2px solid ${activeAnnotation.color}` }
+                    : customStyle;
+
+                  return (
+                    <span
+                      key={seg.key}
+                      style={selectionStyle}
+                      onClick={() => {
+                        if (!hasAnnotations) return;
+                        const firstIdx = seg.annotationIndices[0];
+                        // Clicking the open highlight again closes it.
+                        if (selectedAnnotationIdx === firstIdx && openParagraph === pIdx) {
+                          setSelectedAnnotationIdx(null);
+                          setOpenParagraph(null);
+                        } else {
+                          setSelectedAnnotationIdx(firstIdx);
+                          setOpenParagraph(pIdx);
+                        }
+                      }}
+                      className={`transition-all duration-200 ${
+                        hasAnnotations
+                          ? "hover:brightness-125 select-none rounded-[1px]"
+                          : ""
+                      }`}
+                      title={hasAnnotations ? `${seg.annotationIndices.length} Witness Reflection(s)` : undefined}
+                    >
+                      {seg.text}
+                    </span>
+                  );
+                })}
+              </p>
+              {openParagraph === pIdx && reflectionCard}
+            </div>
+          ))}
+        </div>
+      </div>
+
     </div>
   );
 }

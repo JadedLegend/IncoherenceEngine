@@ -27,6 +27,7 @@ const CURATED_PAID_IDS: string[] = [
   "stepfun/step-5-preview",
   "minimax/minimax-m3.1-flash",
   "anthropic/claude-haiku-5.5",
+  "google/gemini-4-carbon",
 ];
 
 // Free models are matched by keyword, so a new free version is picked up on

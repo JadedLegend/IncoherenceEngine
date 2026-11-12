@@ -126,7 +126,20 @@ async function fetchWithRetry(
       clearTimeout(timeoutId);
     }
   }
-  return fetch(url, options); // final fallback
+  // Every attempt was rate limited. One last try, still under the timeout,
+  // so a stalled request can never leave the screen waiting forever.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s. The model may be overloaded — try a different one.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 // Pull the human-readable error message out of an OpenRouter error body.
@@ -215,6 +228,16 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
     try { localStorage.setItem("shape_alerts", shapeAlerts ? "on" : "off"); } catch {}
     if (!shapeAlerts) setShapeNotice([]);
   }, [shapeAlerts]);
+  // The guide along the bottom explains each shape in plain words. The ×
+  // hides it for the current reply; "Turn off" hides it until re-enabled
+  // under Engines.
+  const [shapeGuide, setShapeGuide] = useState(() => {
+    try { return localStorage.getItem("shape_guide") !== "off"; } catch { return true; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("shape_guide", shapeGuide ? "on" : "off"); } catch {}
+  }, [shapeGuide]);
+  const [guideHiddenFor, setGuideHiddenFor] = useState<number | null>(null);
 
   // Chat state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -229,13 +252,18 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
   const [conversations, setConversations] = useState<SavedConversation[]>(readConversations);
   const [conversationId, setConversationId] = useState<string>(newConversationId);
   const busy = loading || witnessingIds.length > 0;
+  const lastReply = [...messages].reverse().find(m => m.role === "assistant");
+  const guideVisible = shapeGuide && !!lastReply && guideHiddenFor !== lastReply.id && triggeredShapes.length > 0;
 
   // Opening a saved conversation shouldn't count as changing it.
   const skipNextSave = useRef(false);
+  // While a reply is streaming in, wait to save until it's finished.
+  const streamingRef = useRef(false);
 
   // Keep the current conversation saved as it grows.
   useEffect(() => {
     if (skipNextSave.current) { skipNextSave.current = false; return; }
+    if (streamingRef.current) return;
     if (messages.length === 0) return;
     const firstUser = messages.find(m => m.role === "user")?.content ?? "Untitled";
     const title = firstUser.length > 60 ? firstUser.slice(0, 57) + "…" : firstUser;
@@ -371,7 +399,8 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
               ...messages.map(m => ({ role: m.role, content: m.content })),
               { role: "user", content: userText }
             ],
-            temperature: 0.7
+            temperature: 0.7,
+            stream: true
           })
         });
 
@@ -399,23 +428,92 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
           throw new Error(errData?.error?.message || "Failed to fetch response from primary model.");
         }
 
-        const primaryData = await response.json();
-        const primaryText = primaryData.choices[0].message.content;
-
-        // Render the primary response immediately — the witnesses attach
-        // their reflections asynchronously once they land. This is the
-        // difference between waiting for (primary + slowest witness) and
-        // waiting for primary alone.
+        // The reply streams in as it's written, so the person sees words
+        // as soon as the model starts answering instead of waiting for the
+        // whole thing. The witnesses start once the reply is complete.
         const assistantId = nextMessageId.current++;
-        setMessages(prev => [...prev, {
-          id: assistantId,
-          role: "assistant",
-          content: primaryText,
-          annotations: [],
+        let primaryText = "";
+        let shown = false;
+        const showText = (text: string) => {
+          if (!shown) {
+            shown = true;
+            setMessages(prev => [...prev, {
+              id: assistantId,
+              role: "assistant",
+              content: text,
+              annotations: [],
+            }]);
+            setLoading(false);
+          } else {
+            setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: text } : m));
+          }
+        };
+
+        const reader = response.body?.getReader();
+        if (reader) {
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let lastPaint = 0;
+          streamingRef.current = true;
+          // If the stream goes silent for 90s (OpenRouter sends keep-alives
+          // while a model thinks, so real silence means it has stalled),
+          // stop waiting rather than spin forever.
+          const readWithIdleLimit = () => {
+            let timer: ReturnType<typeof setTimeout>;
+            return Promise.race([
+              reader.read(),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => {
+                  reader.cancel().catch(() => {});
+                  reject(new Error("The model stopped responding partway through. Try again, or pick a different engine."));
+                }, 90000);
+              }),
+            ]).finally(() => clearTimeout(timer));
+          };
+          for (;;) {
+            const { done, value } = await readWithIdleLimit();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("data:")) continue; // skips ": OPENROUTER PROCESSING" keep-alives
+              const payload = trimmed.slice(5).trim();
+              if (payload === "[DONE]") continue;
+              try {
+                const chunk = JSON.parse(payload);
+                if (chunk?.error) throw new Error(chunk.error.message || "The model stopped with an error.");
+                const piece = chunk?.choices?.[0]?.delta?.content;
+                if (typeof piece === "string") primaryText += piece;
+              } catch (parseErr: any) {
+                if (parseErr instanceof SyntaxError) continue; // partial line; ignore
+                throw parseErr;
+              }
+            }
+            // Repaint at most ~12 times a second so long replies stay smooth.
+            const now = Date.now();
+            if (primaryText && now - lastPaint > 80) {
+              lastPaint = now;
+              showText(primaryText);
+            }
+          }
+        } else {
+          const primaryData = await response.json();
+          primaryText = primaryData?.choices?.[0]?.message?.content ?? "";
+        }
+
+        streamingRef.current = false;
+        if (!primaryText.trim()) {
+          if (shown) setMessages(prev => prev.filter(m => m.id !== assistantId));
+          throw new Error("The model returned an empty reply. Try again, or pick a different engine.");
+        }
+        showText(primaryText);
+        setMessages(prev => prev.map(m => m.id === assistantId ? {
+          ...m,
           jRatio: analyzers.length === 0 ? 1.0 : undefined,
           coverage: analyzers.length === 0 ? 0 : undefined,
-        }]);
-        setLoading(false);
+        } : m));
 
         if (analyzers.length === 0) {
           setLatestCoverage(0);
@@ -433,6 +531,7 @@ export default function DiagnosticMirror({ apiKey, onLogout }: DiagnosticMirrorP
         // witnesses mirror in the background.
         runWitnesses(primaryText, transcript, assistantId, cleanKey);
     } catch (err: any) {
+      streamingRef.current = false;
       toast.error(err?.message || "An error occurred during transaction. Please try again.");
       console.error(err);
       setLoading(false);
@@ -530,7 +629,11 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
                   { role: "system", content: witnessSystemPrompt },
                   { role: "user", content: witnessUserMessage }
                 ],
-                temperature: 0.2
+                temperature: 0.2,
+                // Witnessing is recognition, not deliberation: a light think
+                // keeps reflections arriving in seconds rather than minutes.
+                // Models without a thinking mode ignore this.
+                reasoning: { effort: "low", exclude: true }
               })
             });
 
@@ -937,6 +1040,17 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
                   Show shape notices
                 </span>
               </label>
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={shapeGuide}
+                  onChange={(e) => setShapeGuide(e.target.checked)}
+                  className="w-3 h-3 border border-border/40 rounded-none accent-primary cursor-pointer flex-shrink-0"
+                />
+                <span className="font-mono text-[10px] tracking-widest uppercase text-foreground/90">
+                  Show shape guide
+                </span>
+              </label>
             </div>
 
             <div className="p-4 border-t border-border/10 flex flex-col gap-2 bg-black/20">
@@ -1091,7 +1205,75 @@ RESPONSE TO WITNESS (the assistant's latest reply — flag spans only from this 
 
       {/* Bottom Telemetry & Metadata */}
       <footer className="flex-shrink-0">
-        {latestCoverage !== null && (
+        {(() => {
+          if (!guideVisible || !lastReply) return null;
+          // Count distinct passages, so two witnesses naming the same
+          // sentence count once.
+          const passages: Record<string, Set<string>> = {};
+          for (const a of lastReply.annotations || []) {
+            (passages[a.type] ??= new Set()).add((a.target_text || "").trim());
+          }
+          const counts: Record<string, number> = {};
+          for (const k in passages) counts[k] = passages[k].size;
+          return (
+            <div
+              className="border-t px-4 sm:px-8 py-3 flex flex-col gap-2.5 animate-in fade-in duration-200"
+              style={{ borderColor: "rgba(196, 154, 42, 0.25)", background: "#08080a" }}
+              aria-label="Shapes in the last reply"
+            >
+              <div className="flex items-center gap-3">
+                <Sparkles className="w-3.5 h-3.5 text-[#c49a2a] flex-shrink-0" />
+                <span className="flex-1 min-w-0 font-mono text-[10px] tracking-wider uppercase text-[#c49a2a]/90 truncate">
+                  Shapes in the last reply
+                  {latestCoverage !== null && latestCoverage > 0 && (
+                    <span className="text-muted-foreground/60 normal-case tracking-normal"> · {latestCoverage}% of it</span>
+                  )}
+                </span>
+                <button
+                  onClick={() => setShapeGuide(false)}
+                  className="font-mono text-[9px] tracking-widest uppercase text-muted-foreground/60 hover:text-foreground flex-shrink-0"
+                  title="Stop showing this guide (turn back on under Engines)"
+                >
+                  Turn off
+                </button>
+                <button
+                  onClick={() => setGuideHiddenFor(lastReply.id)}
+                  className="p-0.5 text-muted-foreground/60 hover:text-foreground flex-shrink-0"
+                  title="Hide for this reply"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-6 gap-y-2 max-h-36 overflow-y-auto custom-scrollbar pr-1">
+                {triggeredShapes.map(key => {
+                  const shape = FAILURE_MODES[key];
+                  if (!shape) return null;
+                  const n = counts[key] || 0;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => { setCorpusMode("shapes"); setCorpusOpen(true); setShapeNotice([]); }}
+                      className="text-left flex items-start gap-2 group"
+                      title="Read more about this shape"
+                    >
+                      <span className="font-mono text-sm leading-none mt-0.5" style={{ color: shape.color }}>{shape.symbol}</span>
+                      <span className="flex flex-col gap-0.5 min-w-0">
+                        <span className="font-mono text-[10px] tracking-wider uppercase group-hover:underline" style={{ color: shape.color }}>
+                          {shape.label}
+                          {n > 0 && <span className="text-muted-foreground/50 normal-case tracking-normal"> · {n} {n === 1 ? "passage" : "passages"}</span>}
+                        </span>
+                        <span className="font-sans text-[11px] leading-snug text-muted-foreground/80">
+                          {shape.plain}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+        {latestCoverage !== null && !guideVisible && (
           <div
             className="font-mono text-[10px] tracking-wider border-t px-4 sm:px-8 py-2.5 flex items-center justify-between"
             style={{
